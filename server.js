@@ -6,7 +6,11 @@ require("dotenv").config({ path: ".env.secret" });
 // https://github.com/dashevo/dashcore-node/blob/master/docs/services/dashd.md
 // https://github.com/dashevo/dashcore-node/blob/master/README.md
 
+let Path = require("path");
 let Crypto = require("crypto");
+
+let Coins = require("@root/merchant-wallet/lib/coins.json");
+let Wallet = require("@root/merchant-wallet").Wallet;
 
 let request = require("@root/request");
 let bodyParser = require("body-parser");
@@ -17,8 +21,16 @@ server.enable("trust proxy");
 server.use("/", app);
 
 let dwhToken = process.env.DWH_TOKEN ?? "";
-let dashAddress = process.env.DASH_ADDRESS ?? "";
 let dashWebhooker = process.env.DASH_WEBHOOKER ?? "";
+
+let wallet = Wallet.create(Coins.dash);
+let walletIndex = 0;
+
+let xpubKey = process.env.XPUB_KEY;
+if (!(xpubKey || "").startsWith("xpub")) {
+    console.error("missing process.env.XPUB_KEY.");
+    process.exit(1);
+}
 
 function auth(req, res, next) {
     // `Basic token` => `token`
@@ -57,7 +69,52 @@ app.use(
     })
 );
 
-app.post("/api/addresses", async function (req, res) {
+app.post("/api/public/payment-addresses", async function (req, res) {
+    let paymentAddr = await wallet.addrFromXPubKey(xpubKey, walletIndex);
+    let amount = 0.001;
+    let qrSvg = await wallet.qrFromXPubKey(xpubKey, walletIndex, amount, {
+        format: "svg",
+    });
+    let svgB64 = Buffer.from(qrSvg, "utf8").toString("base64");
+    let search = "";
+    if (amount) {
+        search = new URLSearchParams({
+            amount: amount,
+        }).toString();
+    }
+
+    let baseUrl = `https://${req.hostname}`;
+    // TODO what if webhooking fails?
+    let resp = await registerWebhook(baseUrl, paymentAddr);
+    console.log("register webhook", resp.body);
+
+    walletIndex += 1;
+    res.json({
+        addr: paymentAddr,
+        amount: amount,
+        qr: {
+            // not url safe because it will be used by data-uri
+            src: `data:image/svg+xml;base64,${svgB64}`,
+            api_src: `/api/payment-addresses/${paymentAddr}.svg?${search}`,
+        },
+    });
+});
+app.get(`/api/public/payment-addresses/:addr.svg`, async function (req, res) {
+    let addr = req.params.addr;
+    let amount = parseFloat(req.query.amount) || undefined;
+    let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
+    res.headers[`Content-Type`] = `image/svg+xml`;
+    res.end(qrSvg);
+});
+
+app.post("/api/addresses/:addr", async function (req, res) {
+    let addr = req.params.addr;
+    let baseUrl = `https://${req.hostname}`;
+    let resp = await registerWebhook(baseUrl, addr);
+    res.json(resp.body);
+});
+
+async function registerWebhook(baseUrl, paymentAddress) {
     let resp = await request({
         timeout: 5 * 1000,
         url: dashWebhooker,
@@ -65,12 +122,12 @@ app.post("/api/addresses", async function (req, res) {
             Authorization: `Bearer ${dwhToken}`,
         },
         json: {
-            address: dashAddress,
-            url: `https://${req.hostname}/api/webhooks/dwh`,
+            address: paymentAddress,
+            url: `${baseUrl}/api/webhooks/dwh`,
         },
     });
-    res.json(resp.body);
-});
+    return resp.toJSON();
+}
 
 app.post("/api/webhooks/dwh", auth, async function (req, res) {
     let data = req.body;
@@ -87,6 +144,8 @@ app.post("/api/webhooks/dwh", auth, async function (req, res) {
 });
 
 app.use("/api", function (err, req, res, next) {
+    console.error("Fail:");
+    console.error(err.stack);
     res.statusCode = 400;
     res.json({
         status: err.status,
@@ -94,6 +153,9 @@ app.use("/api", function (err, req, res, next) {
         message: err.message,
     });
 });
+
+let publicHtml = Path.join(__dirname, "public");
+app.use("/", express.static(publicHtml), { dotfiles: "ignore" });
 
 module.exports = server;
 
