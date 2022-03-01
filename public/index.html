@@ -87,13 +87,18 @@
                 </form>
                 <form data-id="payment-address" onsubmit="Foo.submit()" hidden>
                     <center>
+                        <div data-id="spinner">
+                            Scan with the Dash app to pay...
+                        </div>
                         <div data-id="spinner" class="lds-facebook">
                             <div></div>
                             <div></div>
                             <div></div>
                         </div>
-                        <div data-id="paid" hidden>✅ Paid!</div>
-                        <h3>Đ<span data-tpl="payment-amount">0</span></h3>
+                        <h3>
+                            <span data-id="paid" hidden>✅ Paid!</span>
+                            Đ<span data-tpl="payment-amount">0</span>
+                        </h3>
                         <img data-id="qr-src" />
                         <br />
                         <span data-tpl="payment-address">X</span>

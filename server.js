@@ -6,11 +6,21 @@ require("dotenv").config({ path: ".env.secret" });
 // https://github.com/dashevo/dashcore-node/blob/master/docs/services/dashd.md
 // https://github.com/dashevo/dashcore-node/blob/master/README.md
 
+let tokenPre = process.env.TOKEN_PRE || "hel_";
+
 let Path = require("path");
 let Crypto = require("crypto");
 
+let Base62Token = require("base62-token");
 let Coins = require("@root/merchant-wallet/lib/coins.json");
+let Cors = require("./lib/cors.js");
 let Wallet = require("@root/merchant-wallet").Wallet;
+
+let dict = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+let b62Token = Base62Token.create(dict);
+let tokenLen = 30;
+let tokenIdLen = 24;
+let cors = Cors({ domains: ["*"], methods: ["GET"] });
 
 let request = require("@root/request");
 let bodyParser = require("body-parser");
@@ -35,6 +45,15 @@ if (!(xpubKey || "").startsWith("xpub")) {
 let Cache = require("./lib/cache.js").Cache;
 let sleep = require("./lib/sleep.js").sleep;
 
+function toWeb64(b) {
+    return b.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+function hash(val, n) {
+    let h = Crypto.createHash("sha256").update(val).digest("base64");
+    return toWeb64(h).slice(0, n);
+}
+
 let Db = {
     Addrs: {
         upsert: async function (paymentAddress) {
@@ -50,9 +69,60 @@ let Db = {
         },
     },
     _addrs: {},
+    // misnomer: this is also accounts
+    Tokens: {
+        get: async function (token) {
+            let id = hash(token, tokenIdLen);
+            return Db._tokens[id];
+        },
+        save: async function (account) {
+            Db._tokens[account.id] = account;
+        },
+        generate: async function ({ address, satoshis }) {
+            let token = b62Token.generate(tokenPre, tokenLen);
+            let id = hash(token, tokenIdLen);
+            let hardQuota = 0;
+            let exp = new Date();
+
+            // TODO put this logic somewhere easier to season-to-taste
+            let mult = 100 * 1000 * 1000;
+            // round down for network cost error
+            let trial = 0.0009 * mult;
+            let month = 0.009 * mult;
+            let year = 0.09 * mult;
+            if (satoshis > year) {
+                hardQuota = 1000000;
+                exp.setUTCMonth(exp.getUTCMonth() + 13);
+            } else if (satoshis > month) {
+                hardQuota = 10000;
+                exp.setUTCDate(exp.getUTCDate() + 34);
+            } else if (satoshis > trial) {
+                hardQuota = 100;
+                exp.setUTCHours(exp.getUTCHours() + 84);
+            } else {
+                hardQuota = 3;
+                exp.setUTCSeconds(exp.getUTCSeconds() + 90);
+            }
+
+            Db._tokens[id] = {
+                id: id,
+                created_at: new Date().toISOString(),
+                token: token,
+                address_id: address,
+                last_payment_at: new Date().toISOString(),
+                last_payment_amount: satoshis,
+                request_count: 0,
+                request_quota: hardQuota,
+                expires_at: exp,
+            };
+
+            return Db._tokens[id];
+        },
+    },
+    _tokens: {},
 };
 
-function auth(req, res, next) {
+function webhookAuth(req, res, next) {
     // `Basic token` => `token`
     let auth = (req.headers.authorization || ``).split(" ")[1] || ``;
     let pass = Buffer.from(auth, "base64").toString("utf8").split(":")[1] || ``;
@@ -70,6 +140,22 @@ function auth(req, res, next) {
         throw err;
     }
 
+    next();
+}
+
+async function tokenAuth(req, res, next) {
+    // `Token token` => `token`
+    let token = (req.headers.authorization || ``).split(" ")[1] || ``;
+
+    let account = await Db.Tokens.get(token);
+    if (!account) {
+        let err = new Error("invalid token");
+        err.code = "UNAUTHORIZED";
+        err.status = 401;
+        throw err;
+    }
+
+    req.account = account;
     next();
 }
 
@@ -186,7 +272,7 @@ async function registerWebhook(baseUrl, paymentAddress) {
     return resp.toJSON();
 }
 
-app.post("/api/webhooks/dwh", auth, async function (req, res) {
+app.post("/api/webhooks/dwh", webhookAuth, async function (req, res) {
     let data = req.body;
     let result = {
         received_at: new Date().toISOString(),
@@ -204,9 +290,31 @@ app.post("/api/webhooks/dwh", auth, async function (req, res) {
     console.info(data);
 
     let promise = Cache.Addrs.getOrCreate(data.address);
-    promise.resolve(result);
+    let account = await Db.Tokens.generate({
+        address: data.address,
+        satoshis: data.satoshis,
+    });
+    // TODO make sure we neuter this
+    promise.resolve(account);
 
     res.json(result);
+});
+
+app.use("/api", cors);
+
+app.use("/api/hello", tokenAuth);
+app.get("/api/hello", async function (req, res) {
+    let account = req.account;
+    if (account.request_count > account.request_quota) {
+        let err = new Error("generous quote exceeded");
+        err.code = "PAYMENT_REQUIRED";
+        err.status = 402;
+        throw err;
+    }
+    req.account.request_count += 1;
+    await Db.Tokens.save(req.account);
+
+    res.json(req.account);
 });
 
 app.use("/api", function (err, req, res, next) {

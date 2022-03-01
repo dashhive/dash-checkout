@@ -56,11 +56,13 @@
             return await poll(addr);
         }
 
-        $('[data-id="spinner"]').hidden = true;
-        $('[data-id="spinner"]').style.display = "none"; // TODO NO!!!
+        $$('[data-id="spinner"]').forEach(function ($el) {
+            $el.hidden = true;
+            $el.style.display = "none"; // TODO NO!!!
+        });
         $('[data-id="paid"]').hidden = false;
         $('[data-tpl="payment-amount"]').innerText = (
-            json.satoshis /
+            (json.satoshis || json.last_payment_amount) /
             // TODO why 100M?
             (100 * 1000 * 1000)
         ).toFixed(6);
