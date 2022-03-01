@@ -32,16 +32,42 @@ if (!(xpubKey || "").startsWith("xpub")) {
     process.exit(1);
 }
 
+let Cache = require("./lib/cache.js").Cache;
+let sleep = require("./lib/sleep.js").sleep;
+
+let Db = {
+    Addrs: {
+        upsert: async function (paymentAddress) {
+            if (Db._addrs[paymentAddress]) {
+                return;
+            }
+
+            Db._addrs[paymentAddress] = {
+                created_at: new Date().toISOString(),
+                satoshis: 0,
+                paid_at: null,
+            };
+        },
+    },
+    _addrs: {},
+};
+
 function auth(req, res, next) {
     // `Basic token` => `token`
     let auth = (req.headers.authorization || ``).split(" ")[1] || ``;
     let pass = Buffer.from(auth, "base64").toString("utf8").split(":")[1] || ``;
     if (!pass) {
-        throw new Error("no basic auth password");
+        let err = new Error("no basic auth password");
+        err.code = "UNAUTHORIZED";
+        err.status = 401;
+        throw err;
     }
 
     if (!secureCompare(dwhToken, pass)) {
-        throw new Error("invalid basic auth pass");
+        let err = new Error("invalid basic auth pass");
+        err.code = "UNAUTHORIZED";
+        err.status = 401;
+        throw err;
     }
 
     next();
@@ -86,12 +112,14 @@ app.post("/api/public/payment-addresses", async function (req, res) {
     let baseUrl = `https://${req.hostname}`;
     // TODO what if webhooking fails?
     let resp = await registerWebhook(baseUrl, paymentAddr);
-    console.log("register webhook", resp.body);
+    console.log("[DEBUG] register webhook", resp.body);
 
+    // TODO save in addresses_tokens in DB
     walletIndex += 1;
     res.json({
         addr: paymentAddr,
         amount: amount,
+        token_url: `${baseUrl}/api/public/payment-addresses/${paymentAddr}/token`,
         qr: {
             // not url safe because it will be used by data-uri
             src: `data:image/svg+xml;base64,${svgB64}`,
@@ -99,12 +127,34 @@ app.post("/api/public/payment-addresses", async function (req, res) {
         },
     });
 });
+
 app.get(`/api/public/payment-addresses/:addr.svg`, async function (req, res) {
     let addr = req.params.addr;
     let amount = parseFloat(req.query.amount) || undefined;
     let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
     res.headers[`Content-Type`] = `image/svg+xml`;
     res.end(qrSvg);
+});
+
+app.get(`/api/public/payment-addresses/:addr/token`, async function (req, res) {
+    let paymentAddress = req.params.addr;
+
+    // TODO check db first?
+
+    let racers = [sleep(5000)];
+    let promise = Cache.Addrs.waitFor(paymentAddress);
+    if (promise) {
+        racers.push(promise);
+    }
+    let details = await Promise.race(racers);
+
+    if (!details) {
+        details = {
+            // TODO what if there's nothing?
+            status: "pending",
+        };
+    }
+    res.json(details);
 });
 
 app.post("/api/addresses/:addr", async function (req, res) {
@@ -126,27 +176,49 @@ async function registerWebhook(baseUrl, paymentAddress) {
             url: `${baseUrl}/api/webhooks/dwh`,
         },
     });
+    if (!resp.ok) {
+        throw new Error("failed to register webhook");
+    }
+
+    await Db.Addrs.upsert(paymentAddress);
+    Cache.Addrs.getOrCreate(paymentAddress);
+
     return resp.toJSON();
 }
 
 app.post("/api/webhooks/dwh", auth, async function (req, res) {
     let data = req.body;
+    let result = {
+        received_at: new Date().toISOString(),
+        address: data.address,
+        satoshis: data.satoshis,
+    };
 
     if (!data.satoshis) {
         console.info(`Dash Payment Webhook Test (received 0 satoshis)`);
-        res.json({ address: data.address, satoshis: data.satoshis });
+        res.json(result);
         return;
     }
 
     console.info(`Dash Payment Webhook:`);
     console.info(data);
-    res.json({ address: data.address, satoshis: data.satoshis });
+
+    let promise = Cache.Addrs.getOrCreate(data.address);
+    promise.resolve(result);
+
+    res.json(result);
 });
 
 app.use("/api", function (err, req, res, next) {
-    console.error("Fail:");
-    console.error(err.stack);
-    res.statusCode = 400;
+    if (!err.status) {
+        err.status = 500;
+    }
+    if (err.status >= 500) {
+        console.error("Fail:");
+        console.error(err.stack);
+    }
+
+    res.statusCode = err.status;
     res.json({
         status: err.status,
         code: err.code,

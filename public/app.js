@@ -5,9 +5,7 @@
     let Foo = {};
     exports.Foo = Foo;
 
-    Foo.submit = evify(async function (ev) {
-        console.log("ev:", ev);
-
+    Foo.submit = evify(async function _fooSubmit(ev) {
         let email = $('[type="email"]', ev.target).value;
         let resp = await fetch("/api/public/payment-addresses", {
             method: "POST",
@@ -23,7 +21,7 @@
             ),
         });
         let json = await resp.json();
-        console.log("response:", json);
+        console.log("[DEBUG] response:", json);
 
         /*
         form data-id="payment-address" onsubmit="Foo.submit()" hidden>
@@ -39,7 +37,34 @@
             $form.hidden = true;
         });
         $(`[data-id="payment-address"]`).hidden = false;
+
+        // TODO json.token_url
+        poll(json.addr);
     });
+
+    async function poll(addr) {
+        let resp = await fetch(`/api/public/payment-addresses/${addr}/token`, {
+            method: "GET",
+            headers: {
+                "Content-Type": "application/json",
+            },
+        });
+        let json = await resp.json();
+        console.log("[DEBUG] poll response:", json);
+        if ("pending" === json.status) {
+            // TODO why undefined returns immediate 400?
+            return await poll(addr);
+        }
+
+        $('[data-id="spinner"]').hidden = true;
+        $('[data-id="spinner"]').style.display = "none"; // TODO NO!!!
+        $('[data-id="paid"]').hidden = false;
+        $('[data-tpl="payment-amount"]').innerText = (
+            json.satoshis /
+            // TODO why 100M?
+            (100 * 1000 * 1000)
+        ).toFixed(6);
+    }
 
     function init() {
         $(
