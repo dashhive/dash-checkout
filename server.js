@@ -82,6 +82,8 @@ let Db = {
             let token = b62Token.generate(tokenPre, tokenLen);
             let id = hash(token, tokenIdLen);
             let hardQuota = 0;
+            let softQuota = 0;
+            let stale = new Date();
             let exp = new Date();
 
             // TODO put this logic somewhere easier to season-to-taste
@@ -91,17 +93,28 @@ let Db = {
             let month = 0.009 * mult;
             let year = 0.09 * mult;
             if (satoshis > year) {
-                hardQuota = 1000000;
+                hardQuota = 1100000;
+                softQuota = 1000000;
+                stale.setUTCMonth(exp.getUTCMonth() + 12);
                 exp.setUTCMonth(exp.getUTCMonth() + 13);
             } else if (satoshis > month) {
-                hardQuota = 10000;
+                hardQuota = 11000;
+                softQuota = 10000;
+                stale.setUTCDate(exp.getUTCDate() + 30);
                 exp.setUTCDate(exp.getUTCDate() + 34);
             } else if (satoshis > trial) {
-                hardQuota = 100;
-                exp.setUTCHours(exp.getUTCHours() + 84);
+                //hardQuota = 100;
+                //stale.setUTCHours(exp.getUTCHours() + 24);
+                //exp.setUTCHours(exp.getUTCHours() + 72);
+                hardQuota = 11;
+                softQuota = 10;
+                stale.setUTCSeconds(exp.getUTCSeconds() + 30);
+                exp.setUTCSeconds(exp.getUTCSeconds() + 60);
             } else {
+                softQuota = 2;
                 hardQuota = 3;
-                exp.setUTCSeconds(exp.getUTCSeconds() + 90);
+                stale.setUTCSeconds(exp.getUTCSeconds() + 600);
+                exp.setUTCSeconds(exp.getUTCSeconds() + 3600);
             }
 
             Db._tokens[id] = {
@@ -112,8 +125,10 @@ let Db = {
                 last_payment_at: new Date().toISOString(),
                 last_payment_amount: satoshis,
                 request_count: 0,
+                request_soft_quota: softQuota,
                 request_quota: hardQuota,
-                expires_at: exp,
+                stale_at: stale.toISOString(),
+                expires_at: exp.toISOString(),
             };
 
             return Db._tokens[id];
@@ -305,16 +320,62 @@ app.use("/api", cors);
 app.use("/api/hello", tokenAuth);
 app.get("/api/hello", async function (req, res) {
     let account = req.account;
-    if (account.request_count > account.request_quota) {
-        let err = new Error("generous quote exceeded");
-        err.code = "PAYMENT_REQUIRED";
-        err.status = 402;
-        throw err;
-    }
+    let warnings = [];
+
     req.account.request_count += 1;
+    let plentiful = account.request_soft_quota > account.request_count;
+    if (!plentiful) {
+        let available = account.request_quota > account.request_count;
+        if (!available) {
+            let err = new Error("generous quota exceeded");
+            err.code = "PAYMENT_REQUIRED";
+            err.status = 402;
+            throw err;
+        }
+        let remaining = account.request_quota - account.request_count;
+        warnings.push({
+            status: 402,
+            code: "W_QUOTA",
+            message: `This token's quota has almost been met. Payment will be required within ${remaining} requests.`,
+            requests_remaining: remaining,
+        });
+    }
+
+    let exp = new Date(account.expires_at).valueOf();
+    let now = Date.now();
+    let stale = new Date(account.stale_at).valueOf();
+    let fresh = stale > now;
+    if (!fresh) {
+        let usable = exp > now;
+        if (!usable) {
+            let err = new Error("generous expiration exceeded");
+            err.code = "PAYMENT_REQUIRED";
+            err.status = 402;
+            throw err;
+        }
+        let expiresIn = Math.floor((exp - now) / 1000);
+        //let inDays = expiresIn % (24 * 60 * 60);
+        // TODO 10d 2h 5m
+        warnings.push({
+            status: 402,
+            code: "W_EXPIRY",
+            message: `This token is about to expire. Payment will be required on ${account.expires_at} (in ${expiresIn}s).`,
+            details: {
+                expires_at: account.expires_at,
+                expires_in: expiresIn,
+            },
+        });
+    }
     await Db.Tokens.save(req.account);
 
-    res.json(req.account);
+    // TODO wrap
+    let result = Object.assign(
+        {
+            warnings: warnings,
+        },
+        req.account
+    );
+    res.json(result);
 });
 
 app.use("/api", function (err, req, res, next) {

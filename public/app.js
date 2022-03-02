@@ -55,6 +55,7 @@
             // TODO why undefined returns immediate 400?
             return await poll(addr);
         }
+        console.log("[DEBUG] token response:", json.access_token || json.token);
 
         $$('[data-id="spinner"]').forEach(function ($el) {
             $el.hidden = true;
