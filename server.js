@@ -6,23 +6,23 @@ require("dotenv").config({ path: ".env.secret" });
 // https://github.com/dashevo/dashcore-node/blob/master/docs/services/dashd.md
 // https://github.com/dashevo/dashcore-node/blob/master/README.md
 
+let dashWebhooker = process.env.DASH_WEBHOOKER ?? "";
+let dwhToken = process.env.DWH_TOKEN ?? "";
+let pgUrl = process.env.PG_CONNECTION_STRING;
 let tokenPre = process.env.TOKEN_PRE || "hel_";
 
 let Path = require("path");
 let Crypto = require("crypto");
 
-let Base62Token = require("base62-token");
-let Coins = require("@root/merchant-wallet/lib/coins.json");
 let Cors = require("./lib/cors.js");
+let TableAddr = require("./lib/table-addr.js");
+let TableToken = require("./lib/table-token.js");
+
+let Coins = require("@root/merchant-wallet/lib/coins.json");
+let request = require("@root/request");
+let Slonik = require("slonik");
 let Wallet = require("@root/merchant-wallet").Wallet;
 
-let dict = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-let b62Token = Base62Token.create(dict);
-let tokenLen = 30;
-let tokenIdLen = 24;
-let cors = Cors({ domains: ["*"], methods: ["GET"] });
-
-let request = require("@root/request");
 let bodyParser = require("body-parser");
 let app = require("@root/async-router").Router();
 let express = require("express");
@@ -30,11 +30,13 @@ let server = express();
 server.enable("trust proxy");
 server.use("/", app);
 
-let dwhToken = process.env.DWH_TOKEN ?? "";
-let dashWebhooker = process.env.DASH_WEBHOOKER ?? "";
+let dbPool = Slonik.createPool(pgUrl);
+let tableAddr = TableAddr.create(dbPool);
+let tableToken = TableToken.create(dbPool, { prefix: tokenPre });
+
+let cors = Cors({ domains: ["*"], methods: ["GET"] });
 
 let wallet = Wallet.create(Coins.dash);
-let walletIndex = 0;
 
 let xpubKey = process.env.XPUB_KEY;
 if (!(xpubKey || "").startsWith("xpub")) {
@@ -45,96 +47,10 @@ if (!(xpubKey || "").startsWith("xpub")) {
 let Cache = require("./lib/cache.js").Cache;
 let sleep = require("./lib/sleep.js").sleep;
 
-function toWeb64(b) {
-    return b.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
-
-function hash(val, n) {
-    let h = Crypto.createHash("sha256").update(val).digest("base64");
-    return toWeb64(h).slice(0, n);
-}
-
 let Db = {
-    Addrs: {
-        upsert: async function (paymentAddress) {
-            if (Db._addrs[paymentAddress]) {
-                return;
-            }
-
-            Db._addrs[paymentAddress] = {
-                created_at: new Date().toISOString(),
-                satoshis: 0,
-                paid_at: null,
-            };
-        },
-    },
-    _addrs: {},
+    Addrs: tableAddr,
     // misnomer: this is also accounts
-    Tokens: {
-        get: async function (token) {
-            let id = hash(token, tokenIdLen);
-            return Db._tokens[id];
-        },
-        save: async function (account) {
-            Db._tokens[account.id] = account;
-        },
-        generate: async function ({ address, satoshis }) {
-            let token = b62Token.generate(tokenPre, tokenLen);
-            let id = hash(token, tokenIdLen);
-            let hardQuota = 0;
-            let softQuota = 0;
-            let stale = new Date();
-            let exp = new Date();
-
-            // TODO put this logic somewhere easier to season-to-taste
-            let mult = 100 * 1000 * 1000;
-            // round down for network cost error
-            let trial = 0.0009 * mult;
-            let month = 0.009 * mult;
-            let year = 0.09 * mult;
-            if (satoshis > year) {
-                hardQuota = 1100000;
-                softQuota = 1000000;
-                stale.setUTCMonth(exp.getUTCMonth() + 12);
-                exp.setUTCMonth(exp.getUTCMonth() + 13);
-            } else if (satoshis > month) {
-                hardQuota = 11000;
-                softQuota = 10000;
-                stale.setUTCDate(exp.getUTCDate() + 30);
-                exp.setUTCDate(exp.getUTCDate() + 34);
-            } else if (satoshis > trial) {
-                //hardQuota = 100;
-                //stale.setUTCHours(exp.getUTCHours() + 24);
-                //exp.setUTCHours(exp.getUTCHours() + 72);
-                hardQuota = 11;
-                softQuota = 10;
-                stale.setUTCSeconds(exp.getUTCSeconds() + 30);
-                exp.setUTCSeconds(exp.getUTCSeconds() + 60);
-            } else {
-                softQuota = 2;
-                hardQuota = 3;
-                stale.setUTCSeconds(exp.getUTCSeconds() + 600);
-                exp.setUTCSeconds(exp.getUTCSeconds() + 3600);
-            }
-
-            Db._tokens[id] = {
-                id: id,
-                created_at: new Date().toISOString(),
-                token: token,
-                address_id: address,
-                last_payment_at: new Date().toISOString(),
-                last_payment_amount: satoshis,
-                request_count: 0,
-                request_soft_quota: softQuota,
-                request_quota: hardQuota,
-                stale_at: stale.toISOString(),
-                expires_at: exp.toISOString(),
-            };
-
-            return Db._tokens[id];
-        },
-    },
-    _tokens: {},
+    Tokens: tableToken,
 };
 
 function webhookAuth(req, res, next) {
@@ -196,143 +112,69 @@ app.use(
     })
 );
 
-app.post("/api/public/payment-addresses", async function (req, res) {
-    let paymentAddr = await wallet.addrFromXPubKey(xpubKey, walletIndex);
-    let amount = 0.001;
-    let qrSvg = await wallet.qrFromXPubKey(xpubKey, walletIndex, amount, {
-        format: "svg",
-    });
-    let svgB64 = Buffer.from(qrSvg, "utf8").toString("base64");
-    let search = "";
-    if (amount) {
-        search = new URLSearchParams({
-            amount: amount,
-        }).toString();
+let Plans = {
+    trial: { amount: 0.001 },
+    monthly: { amount: 0.01 },
+    yearly: { amount: 0.1 },
+};
+Plans.getQuota = function (amount) {
+    // TODO move into business logic
+    let hardQuota = 0;
+    let softQuota = 0;
+    let stale = new Date();
+    let exp = new Date();
+
+    let mult = 100 * 1000 * 1000;
+    // round down for network cost error
+    let trial = 0.0009 * mult;
+    let month = 0.009 * mult;
+    let year = 0.09 * mult;
+    if (amount > year) {
+        hardQuota = 1100000;
+        softQuota = 1000000;
+        stale.setUTCMonth(exp.getUTCMonth() + 12);
+        exp.setUTCMonth(exp.getUTCMonth() + 13);
+    } else if (amount > month) {
+        hardQuota = 11000;
+        softQuota = 10000;
+        stale.setUTCDate(exp.getUTCDate() + 30);
+        exp.setUTCDate(exp.getUTCDate() + 34);
+    } else if (amount > trial) {
+        //hardQuota = 100;
+        //stale.setUTCHours(exp.getUTCHours() + 24);
+        //exp.setUTCHours(exp.getUTCHours() + 72);
+        hardQuota = 11;
+        softQuota = 10;
+        stale.setUTCSeconds(exp.getUTCSeconds() + 30);
+        exp.setUTCSeconds(exp.getUTCSeconds() + 60);
+    } else {
+        softQuota = 2;
+        hardQuota = 3;
+        stale.setUTCSeconds(exp.getUTCSeconds() + 600);
+        exp.setUTCSeconds(exp.getUTCSeconds() + 3600);
     }
 
-    let baseUrl = `https://${req.hostname}`;
-    // TODO what if webhooking fails?
-    let resp = await registerWebhook(baseUrl, paymentAddr);
-    console.log("[DEBUG] register webhook", resp.body);
-
-    // TODO save in addresses_tokens in DB
-    walletIndex += 1;
-    res.json({
-        addr: paymentAddr,
-        amount: amount,
-        token_url: `${baseUrl}/api/public/payment-addresses/${paymentAddr}/token`,
-        qr: {
-            // not url safe because it will be used by data-uri
-            src: `data:image/svg+xml;base64,${svgB64}`,
-            api_src: `/api/payment-addresses/${paymentAddr}.svg?${search}`,
-        },
-    });
-});
-
-app.get(`/api/public/payment-addresses/:addr.svg`, async function (req, res) {
-    let addr = req.params.addr;
-    let amount = parseFloat(req.query.amount) || undefined;
-    let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
-    res.headers[`Content-Type`] = `image/svg+xml`;
-    res.end(qrSvg);
-});
-
-app.get(`/api/public/payment-addresses/:addr/token`, async function (req, res) {
-    let paymentAddress = req.params.addr;
-
-    // TODO check db first?
-
-    let racers = [sleep(5000)];
-    let promise = Cache.Addrs.waitFor(paymentAddress);
-    if (promise) {
-        racers.push(promise);
-    }
-    let details = await Promise.race(racers);
-
-    if (!details) {
-        details = {
-            // TODO what if there's nothing?
-            status: "pending",
-        };
-    }
-    res.json(details);
-});
-
-app.post("/api/addresses/:addr", async function (req, res) {
-    let addr = req.params.addr;
-    let baseUrl = `https://${req.hostname}`;
-    let resp = await registerWebhook(baseUrl, addr);
-    res.json(resp.body);
-});
-
-async function registerWebhook(baseUrl, paymentAddress) {
-    let resp = await request({
-        timeout: 5 * 1000,
-        url: dashWebhooker,
-        headers: {
-            Authorization: `Bearer ${dwhToken}`,
-        },
-        json: {
-            address: paymentAddress,
-            url: `${baseUrl}/api/webhooks/dwh`,
-        },
-    });
-    if (!resp.ok) {
-        throw new Error("failed to register webhook");
-    }
-
-    await Db.Addrs.upsert(paymentAddress);
-    Cache.Addrs.getOrCreate(paymentAddress);
-
-    return resp.toJSON();
-}
-
-app.post("/api/webhooks/dwh", webhookAuth, async function (req, res) {
-    let data = req.body;
-    let result = {
-        received_at: new Date().toISOString(),
-        address: data.address,
-        satoshis: data.satoshis,
+    return {
+        hard: hardQuota,
+        soft: softQuota,
+        stale: stale,
+        exp: exp,
     };
+};
 
-    if (!data.satoshis) {
-        console.info(`Dash Payment Webhook Test (received 0 satoshis)`);
-        res.json(result);
-        return;
-    }
-
-    console.info(`Dash Payment Webhook:`);
-    console.info(data);
-
-    let promise = Cache.Addrs.getOrCreate(data.address);
-    let account = await Db.Tokens.generate({
-        address: data.address,
-        satoshis: data.satoshis,
-    });
-    // TODO make sure we neuter this
-    promise.resolve(account);
-
-    res.json(result);
-});
-
-app.use("/api", cors);
-
-app.use("/api/hello", tokenAuth);
-app.get("/api/hello", async function (req, res) {
-    let account = req.account;
+function mustBeFresh(account) {
     let warnings = [];
-
-    req.account.request_count += 1;
     let plentiful = account.request_soft_quota > account.request_count;
     if (!plentiful) {
-        let available = account.request_quota > account.request_count;
+        let available = account.hard_quota > account.request_count;
         if (!available) {
+            // TODO give payaddr / payaddr url?
             let err = new Error("generous quota exceeded");
             err.code = "PAYMENT_REQUIRED";
             err.status = 402;
             throw err;
         }
-        let remaining = account.request_quota - account.request_count;
+        let remaining = account.hard_quota - account.request_count;
         warnings.push({
             status: 402,
             code: "W_QUOTA",
@@ -366,7 +208,204 @@ app.get("/api/hello", async function (req, res) {
             },
         });
     }
-    await Db.Tokens.save(req.account);
+
+    return warnings;
+}
+
+app.post("/api/public/account/:plan", async function (req, res) {
+    let planName = req.params.plan;
+    let accountToken = req.body.token || null;
+    let email = req.body.email || null;
+    let phone = req.body.phone || null;
+    let webhook = req.body.webhook || null;
+    let contact = { email, phone, webhook };
+
+    let plan = Plans[planName];
+    if (!plan) {
+        let err = new Error(`'${plan}' is not a valid billing plan`);
+        err.code = "E_INVALID_PLAN";
+        err.status = 400;
+        throw err;
+    }
+
+    let account;
+    let walletIndex;
+    let payaddrs;
+    if (accountToken) {
+        [account, payaddrs] = await Db.Tokens.getWithPayaddrs(accountToken);
+    }
+    if (account && payaddrs[0]) {
+        let latestPayaddr = payaddrs[0];
+        walletIndex = latestPayaddr.id;
+    } else {
+        walletIndex = await Db.Addrs.next();
+    }
+
+    let payaddr = await wallet.addrFromXPubKey(xpubKey, walletIndex);
+    if (!account) {
+        account = await Db.Tokens.generate(walletIndex, payaddr, contact);
+    }
+
+    let baseUrl = `https://${req.hostname}`;
+    let resp = await registerWebhook(baseUrl, account, payaddr);
+    console.log("[DEBUG] register webhook", resp.body);
+
+    let qrSvg = await wallet.qrFromXPubKey(xpubKey, walletIndex, plan.amount, {
+        format: "svg",
+    });
+    let svgB64 = Buffer.from(qrSvg, "utf8").toString("base64");
+    let search = "";
+    if (plan.amount) {
+        search = new URLSearchParams({
+            amount: plan.amount,
+        }).toString();
+    }
+
+    res.json({
+        payaddr: payaddr,
+        amount: plan.amount,
+        token: account.token,
+        status_url: `${baseUrl}/api/public/account/${account.token}/status`,
+        qr: {
+            // not url safe because it will be used by data-uri
+            src: `data:image/svg+xml;base64,${svgB64}`,
+            api_src: `/api/payment-addresses/${payaddr}.svg?${search}`,
+        },
+    });
+});
+
+app.get(`/api/public/payment-addresses/:addr.svg`, async function (req, res) {
+    // TODO use :token rather than :addr
+    // (and give a good error about how to do generic addresses)
+    let addr = req.params.addr;
+    let amount = parseFloat(req.query.amount) || undefined;
+    let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
+    res.headers[`Content-Type`] = `image/svg+xml`;
+    res.end(qrSvg);
+});
+
+app.get(`/api/public/account/:token/status`, async function (req, res) {
+    let token = req.params.token;
+
+    let [account, payaddrs] = await Db.Tokens.getWithPayaddrs(token);
+    //console.log("debug", account, payaddrs);
+    if (payaddrs[0]?.amount && payaddrs[0]?.last_payment_at) {
+        try {
+            mustBeFresh(account);
+            res.json(account);
+            return;
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    let racers = [sleep(5000)];
+    let promise = Cache.Addrs.waitFor(token);
+    if (promise) {
+        racers.push(promise);
+    }
+    let details = await Promise.race(racers);
+
+    if (!details) {
+        details = {
+            // TODO what if there's nothing?
+            status: "pending",
+        };
+    }
+    res.json(details);
+});
+
+/*
+app.post("/api/addresses/:addr", async function (req, res) {
+    let addr = req.params.addr;
+    let baseUrl = `https://${req.hostname}`;
+    let resp = await registerWebhook(baseUrl, addr);
+    res.json(resp.body);
+});
+*/
+
+async function registerWebhook(baseUrl, account, payaddr) {
+    let whReq = {
+        timeout: 5 * 1000,
+        url: dashWebhooker,
+        headers: {
+            Authorization: `Bearer ${dwhToken}`,
+        },
+        json: {
+            address: payaddr,
+            url: `${baseUrl}/api/webhooks/dwh`,
+        },
+    };
+    let resp = await request(whReq);
+    if (!resp.ok) {
+        console.error();
+        console.error("Failed resp:", resp.toJSON());
+        console.error(whReq);
+        console.error(resp.toJSON());
+        console.error();
+        throw new Error("failed to register webhook");
+    }
+
+    Cache.Addrs.getOrCreate(payaddr, account);
+
+    return resp.toJSON();
+}
+
+app.post("/api/webhooks/dwh", webhookAuth, async function (req, res) {
+    let data = req.body;
+    let result = {
+        received_at: new Date().toISOString(),
+        address: data.address,
+        satoshis: data.satoshis,
+    };
+    let amount = data.satoshis;
+
+    if (!result.satoshis) {
+        console.info(`Dash Payment Webhook Test (received 0)`);
+        res.json(result);
+        return;
+    }
+
+    console.info(`Dash Payment Webhook:`);
+    console.info(data);
+
+    let promise = Cache.Addrs.get(data.address);
+    if (!promise) {
+        console.warn(
+            `[warn] received webhook for an address we're not listening to ${data.address}`
+        );
+        res.statusCode = 400;
+        res.json({
+            message: `not listening for '${data.address}'`,
+        });
+        return;
+    }
+
+    await Db.Addrs.receive({ payaddr: data.address, amount });
+
+    // TODO create "billing cycle" units or some such
+    let quota = Plans.getQuota(amount);
+    let account = await Db.Tokens.reset({
+        payaddr: data.address,
+        quota,
+    });
+    account.amount = data.satoshis;
+    // TODO make sure we neuter this
+    promise.resolve(account);
+
+    res.json(result);
+});
+
+app.use("/api", cors);
+
+app.use("/api/hello", tokenAuth);
+app.get("/api/hello", async function (req, res) {
+    let account = req.account;
+
+    account.request_count += 1;
+    let warnings = mustBeFresh(account);
+    await Db.Tokens.touch(account.token, { resource: `req.method req.url` });
+    //await Db.Tokens.save(req.account);
 
     // TODO wrap
     let result = Object.assign(
@@ -378,7 +417,7 @@ app.get("/api/hello", async function (req, res) {
     res.json(result);
 });
 
-app.use("/api", function (err, req, res, next) {
+app.use("/api", async function (err, req, res, next) {
     if (!err.status) {
         err.status = 500;
     }
@@ -408,4 +447,5 @@ if (require.main === module) {
     httpServer.listen(PORT, function () {
         console.info(`Listening on`, httpServer.address());
     });
+    // TODO httpServer.close(); dbPool.end();
 }
