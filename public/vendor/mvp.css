@@ -15,6 +15,7 @@
     --color-table: #118bee;
     --color-text: #000;
     --color-text-secondary: #999;
+    --color-form-input:#fff;
     --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
     --hover-brightness: 1.2;
     --justify-important: center;
@@ -24,6 +25,13 @@
     --width-card-medium: 460px;
     --width-card-wide: 800px;
     --width-content: 1080px;
+
+    --bg-elevation-1:rgba(0,0,0,0.02);
+    --bg-elevation-2:rgba(0,0,0,0.03);
+    --bg-elevation-3:rgba(0,0,0,0.04);
+    --shadow-elevation-1:rgba(0,0,0,0.03);
+    --shadow-elevation-2:rgba(0,0,0,0.06);
+    --shadow-elevation-3:rgba(0,0,0,0.09);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,7 +39,7 @@
         --color: #0097fc;
         --color-accent: #0097fc4f;
         --color-bg: #333;
-        --color-bg-secondary: #555;
+        --color-bg-secondary: #222;
         --color-link: #0097fc;
         --color-secondary: #e20de9;
         --color-secondary-accent: #e20de94f;
@@ -39,6 +47,14 @@
         --color-table: #0097fc;
         --color-text: #f7f7f7;
         --color-text-secondary: #aaa;
+        --color-form-input: rgb(240,240,240);
+
+        --bg-elevation-1:rgba(255,255,255,0.02);
+        --bg-elevation-2:rgba(255,255,255,0.04);
+        --bg-elevation-3:rgba(255,255,255,0.06);
+        --shadow-elevation-1:rgba(0,0,0,0.12);
+        --shadow-elevation-2:rgba(0,0,0,0.08);
+        --shadow-elevation-3:rgba(0,0,0,0.04);
     }
 }
 
@@ -405,6 +421,7 @@ textarea {
     border-radius: var(--border-radius);
     margin-bottom: 1rem;
     padding: 0.4rem 0.8rem;
+    background-color: var(--color-form-input);
 }
 
 input[readonly],
@@ -479,4 +496,19 @@ blockquote footer {
     font-size: small;
     line-height: var(--line-height);
     padding: 1.5rem 0;
+}
+
+/* Elevation */
+
+section>form, section>aside , .elevation-1{
+  background-color: var(--bg-elevation-1);
+  box-shadow: var(--box-shadow) var(--shadow-elevation-1);
+}
+section>*>form, section>*>aside,.elevation-2{
+  background-color: var(--bg-elevation-2);
+  box-shadow: var(--box-shadow) var(--shadow-elevation-2);
+}
+section>*>*>form, section>*>*>aside, .elevation-3{
+  background-color: var(--bg-elevation-3);
+  box-shadow: var(--box-shadow) var(--shadow-elevation-3);
 }
