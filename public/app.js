@@ -1,5 +1,10 @@
 (function (exports) {
     "use strict";
+    // TODO: REMOVE BELOW
+    $$('[data-id="spinner"]').forEach(function ($el) {
+            $el.addEventListener('click', function (){$el.hidden = true})
+        });
+    // TODO: REMOVE ABOVE
 
     let fetch = exports.fetch || require("fetch");
     let Foo = {};
@@ -69,9 +74,6 @@
 
         $$('[data-id="spinner"]').forEach(function ($el) {
             $el.hidden = true;
-            // TODO @duncan says all we need to do is remove 'display: inline-block'
-            // (but I think he's a LIAR!)
-            $el.style.display = "none"; // TODO NO!!!
         });
         $('[data-id="paid"]').hidden = false;
         $('[data-tpl="payment-amount"]').innerText = (
