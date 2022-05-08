@@ -280,7 +280,7 @@ app.get(`/api/public/payment-addresses/:addr.svg`, async function (req, res) {
     let addr = req.params.addr;
     let amount = parseFloat(req.query.amount) || undefined;
     let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
-    res.headers[`Content-Type`] = `image/svg+xml`;
+    res.setHeader(`Content-Type`, `image/svg+xml`);
     res.end(qrSvg);
 });
 
@@ -311,6 +311,8 @@ app.get(`/api/public/account/:token/status`, async function (req, res) {
             // TODO what if there's nothing?
             status: "pending",
         };
+    } else {
+        details.status = "complete";
     }
     res.json(details);
 });
@@ -354,6 +356,7 @@ async function registerWebhook(baseUrl, account, payaddr) {
 app.post("/api/webhooks/dwh", webhookAuth, async function (req, res) {
     let data = req.body;
     let result = {
+        // TODO was this meant to go in `details`?
         received_at: new Date().toISOString(),
         address: data.address,
         satoshis: data.satoshis,
@@ -391,7 +394,7 @@ app.post("/api/webhooks/dwh", webhookAuth, async function (req, res) {
     });
     account.amount = data.satoshis;
     // TODO make sure we neuter this
-    promise.resolve(account);
+    Cache.Addrs.resolve(data.address, account);
 
     res.json(result);
 });
@@ -417,6 +420,7 @@ app.get("/api/hello", async function (req, res) {
     res.json(result);
 });
 
+// Default API Error Handler
 app.use("/api", async function (err, req, res, next) {
     if (!err.status) {
         err.status = 500;
