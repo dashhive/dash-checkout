@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+set -u
+
+source .env
+source .env.secret
+
+echo 'SELECT token, hard_quota, expires_at FROM token;' |
+    psql "${PG_CONNECTION_STRING}"

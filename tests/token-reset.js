@@ -16,30 +16,30 @@ let Coins = require("@root/merchant-wallet/lib/coins.json");
 let Slonik = require("slonik");
 
 async function main() {
-    let wallet = Wallet.create(Coins.dash);
+  let wallet = Wallet.create(Coins.dash);
 
-    let dbPool = Slonik.createPool(pgUrl);
+  let dbPool = Slonik.createPool(pgUrl);
 
-    let Addr = TableAddr.create(dbPool);
-    let Token = TableToken.create(dbPool, { prefix: tokenPre });
+  let Addr = TableAddr.create(dbPool);
+  let Token = TableToken.create(dbPool, { prefix: tokenPre });
 
-    let walletIndex = await Addr.next();
+  let walletIndex = await Addr.next();
 
-    let payaddr = await wallet.addrFromXPubKey(xpubKey, walletIndex);
-    await Token.generate(walletIndex, payaddr, { email: null });
+  let payaddr = await wallet.addrFromXPubKey(xpubKey, walletIndex);
+  await Token.generate(walletIndex, payaddr, { email: null });
 
-    let now = Date.now();
-    await Token.reset({
-        payaddr: payaddr,
-        quota: {
-            hard: 11,
-            soft: 10,
-            stale: new Date(now + 15 * 60 * 1000),
-            exp: new Date(now + 20 * 60 * 1000),
-        },
-    });
+  let now = Date.now();
+  await Token.reset({
+    payaddr: payaddr,
+    quota: {
+      hard_quota: 11,
+      soft_quota: 10,
+      stale: new Date(now + 15 * 60 * 1000),
+      exp: new Date(now + 20 * 60 * 1000),
+    },
+  });
 
-    dbPool.end();
+  dbPool.end();
 }
 
 main();

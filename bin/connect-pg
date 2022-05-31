@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+set -u
+
+source .env
+source .env.secret
+
+psql "${PG_CONNECTION_STRING}"

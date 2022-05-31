@@ -1,4 +1,4 @@
-# dash-webhook-client
+# Dash Merchant Payments Demo
 
 Registers an address with the test webhook service and logs out payments to that address.
 
@@ -20,8 +20,8 @@ curl -X POST http://localhost:3274/api/hello \
 
 # Pre-reqs
 
--   PostgreSQL: https://webinstall.dev/postgres
--   Node.js: https://webinstall.dev/node
+- PostgreSQL: https://webinstall.dev/postgres
+- Node.js: https://webinstall.dev/node
 
 ## API
 
@@ -80,20 +80,81 @@ GET /api/public/account/:token/status
 
 ```txt
 GET /api/hello
+Authorization: Bearer Tttttttttttttttttttt
 
 {
 }
 ```
 
-## Internal API
+## Merchant Payment API
+
+```txt
+GET /api/public/plans
+
+[
+    {
+        "trial": {
+            "amount": 0.001,
+            "soft_duration_hours": 24,
+            "hard_duration_hours": 72,
+            "soft_quota": 100,
+            "hard_quota": 110
+        },
+        "monthly": {
+            "amount": 0.01,
+            "soft_duration_days": 30,
+            "hard_duration_days": 34,
+            "soft_quota": 10000,
+            "hard_quota": 11000
+        }
+    }
+]
+```
+
+The webhook is authenticated with HTTP Basic Auth. It uses either the given username and password or a dummy username and the token as the password.
+
+```txt
+POST /api/webhooks/payment-accepted
+Authorization: Basic Mmmmmmmmmmmmmmmmmmmmmmmm
+
+{
+    "address": "Xxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccc",
+    "event": "txlock",
+    "satoshis": 100100100,
+    "txid": "0000000000000000000000000000000000000000000000000000000000000000"
+}
+
+{
+    "address": "Xxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccc",
+    "satoshis": 100100100
+}
+```
+
+## Internal Service API
 
 Receive payment confirmation webhooks from a Dash WebHook Service
 
 ```txt
-POST /api/webhooks/dwh
+POST /api/webhooks/
+Authorization: Bearer Txxxxxxxxxxxxxxxxxxxxxxx
+
 {
-    "ddress": "Xxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccc",
-    "satoshis": 100100100
+    "address": "Xxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccc",
+    "url": "https://[api:token@]example.com/api/webhooks/payment-accepted",
+}
+```
+
+The webhook is authenticated with HTTP Basic Auth. It uses either the given username and password or a dummy username and the token as the password.
+
+```txt
+POST /api/full-node-webhooks/dwh
+Authorization: Basic <Base64(api:xxxxxxxxxxxxxxxxxxxxxxx)>
+
+{
+    "address": "Xxxxxxxxxxxxxxxxxxxxxxxxxxxxcccccc",
+    "event": "txlock",
+    "satoshis": 100100100,
+    "txid": "0000000000000000000000000000000000000000000000000000000000000000"
 }
 
 {
