@@ -307,7 +307,7 @@ app.use("/", express.static(publicHtml, { dotfiles: "ignore" }));
 module.exports = server;
 
 if (require.main === module) {
-  let PORT = process.env.PORT || 3274; // DASH
+  let PORT = process.env.PORT || 3225; // DACK
   let Http = require("http");
   let httpServer = Http.createServer(server);
 
