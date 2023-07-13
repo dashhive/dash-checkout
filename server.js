@@ -81,11 +81,11 @@ async function rOrderApiAccess(req, res) {
   let walletIndex;
   let payaddrs;
   if (accountToken) {
-    [account, payaddrs] = await Db.Tokens.getWithPayaddrs(accountToken);
+    [account, payaddrs] = await Db.Tokens.getWithPayAddrs(accountToken);
   }
   if (account && payaddrs[0]) {
-    let latestPayaddr = payaddrs[0];
-    walletIndex = latestPayaddr.id;
+    let latestPayAddr = payaddrs[0];
+    walletIndex = latestPayAddr.id;
   } else {
     walletIndex = await Db.Addrs.next();
   }
@@ -189,7 +189,7 @@ app.post("/api/addresses/:addr", async function (req, res) {
 async function rCheckTokenStatus(req, res) {
   let token = req.params.token;
 
-  let [account, payaddrs] = await Db.Tokens.getWithPayaddrs(token);
+  let [account, payaddrs] = await Db.Tokens.getWithPayAddrs(token);
   //console.log("debug", account, payaddrs);
   if (payaddrs[0]?.amount && payaddrs[0]?.last_payment_at) {
     try {
