@@ -9,16 +9,16 @@ let Slonik = require("slonik");
 let sql = Slonik.sql;
 
 async function main() {
-    let pool = Slonik.createPool(pgUrl);
+  let pool = Slonik.createPool(pgUrl);
 
-    let payaddr = {
-        id: "h",
-        pubkeyhash: "X",
-        satoshis: 0,
-    };
-    await pool
-        .query(
-            sql`
+  let payaddr = {
+    id: "h",
+    pubkeyhash: "X",
+    satoshis: 0,
+  };
+  await pool
+    .query(
+      sql`
               INSERT INTO payaddr (
                   id,
                   pubkeyhash,
@@ -29,20 +29,20 @@ async function main() {
                   ${payaddr.satoshis}
               )
             `
-        )
-        .catch(async function (err) {
-            if ("UniqueIntegrityConstraintViolationError" !== err.name) {
-                throw err;
-            }
-            let row = await pool.one(
-                sql`SELECT * FROM payaddr WHERE id = ${payaddr.id}`
-            );
-            console.log(row);
-        });
-    await pool.end();
+    )
+    .catch(async function (err) {
+      if ("UniqueIntegrityConstraintViolationError" !== err.name) {
+        throw err;
+      }
+      let row = await pool.one(
+        sql`SELECT * FROM payaddr WHERE id = ${payaddr.id}`
+      );
+      console.log(row);
+    });
+  await pool.end();
 }
 
 main().catch(function (err) {
-    console.error("Fail:");
-    console.error(err);
+  console.error("Fail:");
+  console.error(err);
 });
