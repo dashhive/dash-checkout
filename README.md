@@ -4,16 +4,24 @@ Registers an address with the test webhook service and logs out payments to that
 
 <kbd><img width="606" alt="payment demo screenshot" src="https://user-images.githubusercontent.com/122831/156580178-6e84bc85-0804-4dc1-aa8a-553cf97ed0e6.png"></kbd>
 
-```bash
+```sh
 npm ci
+```
+
+```sh
+# copy the env file
+cp -RpP example.env .env
+
+# season to taste
+vi .env
+```
+
+```sh
 npx knex migrate:latest
+npm run start
 ```
 
-```bash
-node server.js
-```
-
-```bash
+```sh
 curl -X POST http://localhost:3274/api/hello \
   -H 'Authorization: Token YOUR_TOKEN'
 ```

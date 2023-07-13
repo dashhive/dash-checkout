@@ -4,8 +4,7 @@ let Hooks = module.exports;
 
 let Crypto = require("crypto");
 
-let Base58Check = require("@root/base58check").Base58Check;
-let b58c = Base58Check.create();
+let DashKeys = require("dashkeys");
 let request = require("./lib/request.js");
 
 //@ts-ignore TODO
@@ -36,7 +35,7 @@ Hooks.create = function ({ defaultWebhookTimeout = 5 * 1000, Db }) {
 
     let addr;
     try {
-      addr = await b58c.verify(data.address);
+      addr = await DashKeys.decode(data.address);
     } catch (e) {
       throw new Error("BAD_REQUEST: invalid dash address");
     }
