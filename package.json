@@ -1,18 +1,26 @@
 {
+  "name": "dash-hello",
   "dependencies": {
+    "@dashincubator/secp256k1": "^1.7.1-5",
     "@root/async-router": "^1.0.10",
-    "@root/merchant-wallet": "^1.0.5",
     "@root/request": "^1.8.1",
     "base62-token": "^1.1.1",
     "body-parser": "^1.19.2",
+    "dashhd": "^3.0.5",
+    "dashkeys": "^1.0.0",
     "dotenv": "^16.0.0",
     "express": "^4.17.3",
-    "knex": "^1.0.3",
+    "knex": "^2.5.1",
     "pg": "^8.7.3",
+    "qrcode-svg": "^1.1.0",
     "slonik": "^27.1.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.13",
     "@types/node": "^17.0.35"
+  },
+  "scripts": {
+    "fmt": "npx -p prettier@2.x -- prettier -w '**/*.{js,md}'",
+    "lint": "npx -p typescript@4.x -- tsc -p ./jsconfig.json"
   }
 }

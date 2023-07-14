@@ -5,8 +5,8 @@
  * @returns { Promise<void> }
  */
 exports.up = async function (knex) {
-    await knex.raw('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
-    await knex.raw('SET TIMEZONE="UTC"');
+  await knex.raw('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
+  await knex.raw('SET TIMEZONE="UTC"');
 };
 
 /**
@@ -14,5 +14,5 @@ exports.up = async function (knex) {
  * @returns { Promise<void> }
  */
 exports.down = async function (knex) {
-    // nothing to undo
+  // nothing to undo
 };

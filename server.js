@@ -19,7 +19,8 @@ let Path = require("path");
 let Cors = require("./lib/cors.js");
 
 let request = require("@root/request");
-let Wallet = require("@root/merchant-wallet").Wallet;
+let DashHd = require("dashhd");
+let Qr = require("./lib/qr.js");
 
 let bodyParser = require("body-parser");
 let app = require("@root/async-router").Router();
@@ -30,13 +31,13 @@ server.use("/", app);
 
 let cors = Cors({ domains: ["*"], methods: ["GET"] });
 
-//@ts-ignore
-let Coins = require("@root/merchant-wallet/lib/coins.json");
-let wallet = Wallet.create(Coins.dash);
-
-let xpubKey = process.env.XPUB_KEY;
-if (!(xpubKey || "").startsWith("xpub")) {
-  console.error("missing process.env.XPUB_KEY.");
+let xpubKey = process.env.XPUB_KEY || "";
+if (!xpubKey) {
+  console.error("missing process.env.XPUB_KEY");
+  process.exit(1);
+}
+if (!xpubKey.startsWith("xpub")) {
+  console.error("wrong format for process.env.XPUB_KEY");
   process.exit(1);
 }
 
@@ -80,27 +81,44 @@ async function rOrderApiAccess(req, res) {
   let walletIndex;
   let payaddrs;
   if (accountToken) {
-    [account, payaddrs] = await Db.Tokens.getWithPayaddrs(accountToken);
+    [account, payaddrs] = await Db.Tokens.getWithPayAddrs(accountToken);
   }
   if (account && payaddrs[0]) {
-    let latestPayaddr = payaddrs[0];
-    walletIndex = latestPayaddr.id;
+    let latestPayAddr = payaddrs[0];
+    walletIndex = latestPayAddr.id;
   } else {
     walletIndex = await Db.Addrs.next();
   }
 
-  let payaddr = await wallet.addrFromXPubKey(xpubKey, walletIndex);
-  if (!account) {
-    account = await Db.Tokens.generate(walletIndex, payaddr, contact);
+  //let XPUB_DEPTH_FULL_AUDIT = 2;
+  let XPUB_DEPTH_AUDIT = 3;
+  let XPUB_DEPTH_SHARE = 4;
+  let xpub = await DashHd.fromXKey(xpubKey, { bip32: true, xkey: "" });
+  if (XPUB_DEPTH_AUDIT === xpub.depth) {
+    xpub = DashHd.deriveChild(xpub, DashHd.RECEIVE, DashHd.PUBLIC);
+  }
+  if (XPUB_DEPTH_SHARE !== xpub.depth) {
+    throw new Error("xpub is not bip44 compatible");
   }
 
+  let payAddrKey = await xpub.deriveAddress(walletIndex);
+  let payAddr = await DashHd.toAddr(payAddrKey.publicKey);
+  if (!account) {
+    account = await Db.Tokens.generate(walletIndex, payAddr, contact);
+  }
+
+  // TODO prevent domain fronting
   let baseUrl = `https://${req.hostname}`;
-  let resp = await registerWebhook(baseUrl, account, payaddr);
+  let resp = await registerWebhook(baseUrl, account, payAddr);
   console.log("[DEBUG] register webhook", resp.body);
 
-  let qrSvg = await wallet.qrFromXPubKey(xpubKey, walletIndex, plan.amount, {
-    format: "svg",
-  });
+  let MIN_STAMP_VALUE = 800;
+  let value = toSats(plan.amount);
+  value += MIN_STAMP_VALUE;
+
+  let amount = toDash(value);
+  let content = Qr.toUrl({ address: payAddr, amount: amount });
+  let qrSvg = Qr.toSvg(content);
   let svgB64 = Buffer.from(qrSvg, "utf8").toString("base64");
   let search = "";
   if (plan.amount) {
@@ -110,29 +128,49 @@ async function rOrderApiAccess(req, res) {
   }
 
   res.json({
-    payaddr: payaddr,
+    address: payAddr,
+    payaddr: payAddr,
     amount: plan.amount,
     token: account.token,
     status_url: `${baseUrl}/api/public/account/${account.token}/status`,
     qr: {
-      // not url safe because it will be used by data-uri
+      // not url-safe because it will be used by data-uri
       src: `data:image/svg+xml;base64,${svgB64}`,
-      api_src: `/api/payment-addresses/${payaddr}.svg?${search}`,
+      api_src: `/api/payment-addresses/${payAddr}.svg?${search}`,
     },
   });
 }
 
-/** @type {import('express').Handler} */
-async function genSvgFromAddr(req, res) {
-  // TODO use :token rather than :addr
-  // (and give a good error about how to do generic addresses)
-  let addr = req.params.addr;
-  //@ts-ignore
-  let amount = parseFloat(req.query.amount || "") || undefined;
-  let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
-  res.setHeader(`Content-Type`, `image/svg+xml`);
-  res.end(qrSvg);
+/**
+ * @param {Number} sats
+ */
+function toDash(sats) {
+  let dash = sats / 100000000;
+  let dashStr = dash.toFixed(8);
+  dash = parseFloat(dashStr);
+  return dash;
 }
+
+/**
+ * @param {Number} dash
+ */
+function toSats(dash) {
+  let sats = dash * 100000000;
+  sats = Math.round(sats);
+  return sats;
+}
+
+///** @type {import('express').Handler} */
+//async function genSvgFromAddr(req, res) {
+//  // TODO use :token rather than :addr
+//  // (and give a good error about how to do generic addresses)
+//  let addr = req.params.addr;
+//  //@ts-ignore
+//  let amount = parseFloat(req.query.amount || "") || undefined;
+//  let qrSvg = wallet.qrFromAddr(addr, amount, { format: `svg` });
+//  res.setHeader(`Content-Type`, `image/svg+xml`);
+//  res.end(qrSvg);
+//}
 
 /*
 app.post("/api/addresses/:addr", async function (req, res) {
@@ -151,7 +189,7 @@ app.post("/api/addresses/:addr", async function (req, res) {
 async function rCheckTokenStatus(req, res) {
   let token = req.params.token;
 
-  let [account, payaddrs] = await Db.Tokens.getWithPayaddrs(token);
+  let [account, payaddrs] = await Db.Tokens.getWithPayAddrs(token);
   //console.log("debug", account, payaddrs);
   if (payaddrs[0]?.amount && payaddrs[0]?.last_payment_at) {
     try {
@@ -288,7 +326,7 @@ app.use("/api", cors);
 // Ordering stuff
 app.get("/api/public/plans", rPlansList);
 app.post("/api/public/account/:plan", rOrderApiAccess);
-app.get(`/api/public/payment-addresses/:addr.svg`, genSvgFromAddr);
+//app.get(`/api/public/payment-addresses/:addr.svg`, genSvgFromAddr);
 app.get(`/api/public/account/:token/status`, rCheckTokenStatus);
 
 // Protected API Access
