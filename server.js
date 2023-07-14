@@ -123,11 +123,12 @@ async function rOrderApiAccess(req, res) {
   let value = toSats(plan.amount);
   value += MIN_STAMP_VALUE;
 
+  let xpub = await DashHd.toXPub(contactXPub);
   let amount = toDash(value);
   // TODO: DIP: Agent should warn user if URL is not expected?
   let content = Qr.toUrl({
     address: payAddr,
-    xpub: contactXPub,
+    xpub: xpub,
     amount: amount,
     nickname: "Hello API",
     // product_url: "/plans/hello-basic",
