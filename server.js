@@ -78,38 +78,45 @@ async function rOrderApiAccess(req, res) {
   }
 
   let account;
-  let walletIndex;
+  let accountIndex;
   let payaddrs;
   if (accountToken) {
     [account, payaddrs] = await Db.Tokens.getWithPayAddrs(accountToken);
   }
   if (account && payaddrs[0]) {
     let latestPayAddr = payaddrs[0];
-    walletIndex = latestPayAddr.id;
+    accountIndex = latestPayAddr.id;
   } else {
-    walletIndex = await Db.Addrs.next();
+    accountIndex = await Db.Addrs.next();
   }
+  console.log(`[DEBUG] accountIndex`, accountIndex);
 
   //let XPUB_DEPTH_FULL_AUDIT = 2;
   let XPUB_DEPTH_AUDIT = 3;
   let XPUB_DEPTH_SHARE = 4;
-  let xpub = await DashHd.fromXKey(xpubKey, { bip32: true, xkey: "" });
-  if (XPUB_DEPTH_AUDIT === xpub.depth) {
-    xpub = DashHd.deriveChild(xpub, DashHd.RECEIVE, DashHd.PUBLIC);
+  let contactXPub = await DashHd.fromXKey(xpubKey, { bip32: true, xkey: "" });
+  if (XPUB_DEPTH_AUDIT === contactXPub.depth) {
+    contactXPub = DashHd.deriveChild(
+      contactXPub,
+      DashHd.RECEIVE,
+      DashHd.PUBLIC
+    );
   }
-  if (XPUB_DEPTH_SHARE !== xpub.depth) {
+  if (XPUB_DEPTH_SHARE !== contactXPub.depth) {
     throw new Error("xpub is not bip44 compatible");
   }
+  //let xpubStr = DashHd.toXPub(contactXPub);
 
-  let payAddrKey = await xpub.deriveAddress(walletIndex);
+  let FIRST_ADDRESS = 0;
+  let payAddrKey = await contactXPub.deriveAddress(FIRST_ADDRESS);
   let payAddr = await DashHd.toAddr(payAddrKey.publicKey);
   if (!account) {
-    account = await Db.Tokens.generate(walletIndex, payAddr, contact);
+    account = await Db.Tokens.generate(accountIndex, payAddr, contact);
   }
 
   // TODO prevent domain fronting
   let baseUrl = `https://${req.hostname}`;
-  let resp = await registerWebhook(baseUrl, account, payAddr);
+  let resp = await registerWebhook(baseUrl, account, [payAddr]);
   console.log("[DEBUG] register webhook", resp.body);
 
   let MIN_STAMP_VALUE = 800;
@@ -117,7 +124,14 @@ async function rOrderApiAccess(req, res) {
   value += MIN_STAMP_VALUE;
 
   let amount = toDash(value);
-  let content = Qr.toUrl({ address: payAddr, amount: amount });
+  // TODO: DIP: Agent should warn user if URL is not expected?
+  let content = Qr.toUrl({
+    address: payAddr,
+    xpub: contactXPub,
+    amount: amount,
+    nickname: "Hello API",
+    // product_url: "/plans/hello-basic",
+  });
   let qrSvg = Qr.toSvg(content);
   let svgB64 = Buffer.from(qrSvg, "utf8").toString("base64");
   let search = "";
@@ -128,6 +142,7 @@ async function rOrderApiAccess(req, res) {
   }
 
   res.json({
+    addresses: [payAddr],
     address: payAddr,
     payaddr: payAddr,
     amount: plan.amount,
@@ -176,7 +191,7 @@ function toSats(dash) {
 app.post("/api/addresses/:addr", async function (req, res) {
     let addr = req.params.addr;
     let baseUrl = `https://${req.hostname}`;
-    let resp = await registerWebhook(baseUrl, addr);
+    let resp = await registerWebhook(baseUrl, [addr]);
     res.json(resp.body);
 });
 */
@@ -201,7 +216,10 @@ async function rCheckTokenStatus(req, res) {
     }
   }
 
-  let racers = [sleep(5000)];
+  let racers = [];
+  let sleeper = sleep(5000);
+  racers.push(sleeper);
+
   let promise = Cache.Addrs.waitFor(token);
   if (promise) {
     racers.push(promise);
@@ -223,9 +241,9 @@ async function rCheckTokenStatus(req, res) {
 /**
  * @param {String} baseUrl
  * @param {Account} account
- * @param {String} payaddr
+ * @param {Array<String>} addresses
  */
-async function registerWebhook(baseUrl, account, payaddr) {
+async function registerWebhook(baseUrl, account, addresses) {
   // TODO
   // 1. save owner url and addr to database
   // 2. register ourself as hook
@@ -238,7 +256,8 @@ async function registerWebhook(baseUrl, account, payaddr) {
       Authorization: `Bearer ${merchantTok}`,
     },
     json: {
-      address: payaddr,
+      addresses: addresses,
+      address: addresses[0],
       url: `${baseUrl}/api/webhooks/payment-accepted`,
     },
   };
@@ -253,7 +272,7 @@ async function registerWebhook(baseUrl, account, payaddr) {
     throw new Error("failed to register webhook");
   }
 
-  Cache.Addrs.getOrCreate(payaddr, account);
+  Cache.Addrs.getOrCreate(addresses, account);
 
   return resp.toJSON();
 }
@@ -261,31 +280,34 @@ async function registerWebhook(baseUrl, account, payaddr) {
 /** @type {import('express').Handler} */
 async function rUpdatePaymentStatus(req, res) {
   let payment = req.payment;
-  let amount = payment.satoshis;
+  let addresses = payment.addresses;
+  let satoshis = payment.satoshis;
 
-  let promise = Cache.Addrs.get(payment.address);
+  let promise = Cache.Addrs.getAny(addresses);
   if (!promise) {
     console.warn(
-      `[warn] received webhook for an address we're not listening to ${payment.address}`
+      `[warn] received webhook for an address we're not listening to ${addresses}`
     );
     res.statusCode = 400;
     res.json({
-      message: `not listening for '${payment.address}'`,
+      message: `not listening for '${addresses}'`,
     });
     return;
   }
 
-  await Db.Addrs.receive({ payaddr: payment.address, amount });
+  let indexes = [1, 2, 3, 4, 5, 14, 15, 16, 17, 18, 19];
+  await Db.Addrs.receive({ indexes, satoshis });
 
   // TODO create "billing cycle" units or some such
-  let quota = Plans.getQuota(amount);
+  let address = payment.addresses[0];
+  let quota = Plans.getQuota(satoshis);
   let account = await Db.Tokens.reset({
-    payaddr: payment.address,
+    payaddr: address,
     quota,
   });
   account.amount = payment.satoshis;
   // TODO make sure we neuter this
-  Cache.Addrs.resolve(payment.address, account);
+  Cache.Addrs.resolve(payment.addresses, account);
 
   res.json(payment);
 }

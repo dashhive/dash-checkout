@@ -16,15 +16,20 @@ let TableToken = require("./lib/table-token.js");
 
 let Slonik = require("slonik");
 
-let dbPool = Slonik.createPool(pgUrl);
-let tableAddr = TableAddr.create(dbPool);
-let tableToken = TableToken.create(dbPool, { prefix: tokenPre });
-
+//@ts-ignore - late assignment
 let Db = {
-  Addrs: tableAddr,
-  // misnomer: this is also accounts
-  Tokens: tableToken,
+  //@ts-ignore - fake out
+  Addrs: TableAddr.create(null),
+  //@ts-ignore - fake out
+  Tokens: TableToken.create(null, { prefix: tokenPre }),
 };
+
+Slonik.createPool(pgUrl).then(function (pool) {
+  let tableAddrs = TableAddr.create(pool);
+  let tableTokens = TableToken.create(pool, { prefix: tokenPre });
+  Db.Addrs = tableAddrs;
+  Db.Tokens = tableTokens;
+});
 
 Merchant.Db = Db;
 
@@ -106,22 +111,25 @@ Merchant.webhookAuth = function (expectedToken) {
 };
 
 /** @type {import('express').Handler} */
-Merchant.rParsePaymentWebhook = async function rParsePaymentWebhook(
-  req,
-  res,
-  next
-) {
+Merchant.rParsePaymentWebhook = async function (req, res, next) {
   let p = req.body;
+
+  console.log(`[DEBUG] received payment webhook`, JSON.stringify(p, null, 2));
+
+  let date = new Date();
+  let at = date.toISOString();
 
   /** @type {FullNodeWebhook} */
   let payment = {
     // TODO was this meant to go in `details`?
-    received_at: new Date().toISOString(),
+    received_at: at,
     address: p.address,
+    addresses: p.addresses,
     event: p.event,
     instantsend: "txlock" === p.event,
     satoshis: p.satoshis,
-    txid: p.txid,
+    txid: p.txId || p.txid || p.transaction?.txId,
+    txId: p.txId || p.txid || p.transaction?.txId,
   };
 
   if (!payment.satoshis) {

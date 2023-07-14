@@ -18,7 +18,7 @@ async function main() {
   };
   await pool
     .query(
-      sql`
+      sql.unsafe`
               INSERT INTO payaddr (
                   id,
                   pubkeyhash,
@@ -35,7 +35,7 @@ async function main() {
         throw err;
       }
       let row = await pool.one(
-        sql`SELECT * FROM payaddr WHERE id = ${payaddr.id}`
+        sql.unsafe`SELECT * FROM payaddr WHERE id = ${payaddr.id}`
       );
       console.log(row);
     });
