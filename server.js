@@ -31,6 +31,7 @@ server.use("/", app);
 
 let cors = Cors({ domains: ["*"], methods: ["GET"] });
 
+// TODO use wallet phrase (or root hd key)
 let xpubKey = process.env.XPUB_KEY || "";
 if (!xpubKey) {
   console.error("missing process.env.XPUB_KEY");
@@ -91,6 +92,7 @@ async function rOrderApiAccess(req, res) {
   }
   console.log(`[DEBUG] accountIndex`, accountIndex);
 
+  // TODO this will be per-customer
   //let XPUB_DEPTH_FULL_AUDIT = 2;
   let XPUB_DEPTH_AUDIT = 3;
   let XPUB_DEPTH_SHARE = 4;
@@ -109,6 +111,7 @@ async function rOrderApiAccess(req, res) {
 
   let FIRST_ADDRESS = 0;
   let payAddrKey = await contactXPub.deriveAddress(FIRST_ADDRESS);
+  // TODO insert several into db
   let payAddr = await DashHd.toAddr(payAddrKey.publicKey);
   if (!account) {
     account = await Db.Tokens.generate(accountIndex, payAddr, contact);
