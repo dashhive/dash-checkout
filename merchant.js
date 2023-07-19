@@ -11,6 +11,7 @@ let Crypto = require("crypto");
 let MA = require("./lib/master-account.js");
 
 // For the service itself
+let TableAccounts = require("./lib/table-accounts.js");
 let TableAddr = require("./lib/table-addr.js");
 let TableToken = require("./lib/table-token.js");
 
@@ -19,16 +20,20 @@ let Slonik = require("slonik");
 //@ts-ignore - late assignment
 let Db = {
   //@ts-ignore - fake out
+  Accounts: TableAccounts.create(null),
+  //@ts-ignore - fake out
   Addrs: TableAddr.create(null),
   //@ts-ignore - fake out
   Tokens: TableToken.create(null, { prefix: tokenPre }),
 };
 
 Slonik.createPool(pgUrl).then(function (pool) {
+  let tableAccounts = TableAccounts.create(pool);
   let tableAddrs = TableAddr.create(pool);
   let tableTokens = TableToken.create(pool, { prefix: tokenPre });
   Db.Addrs = tableAddrs;
   Db.Tokens = tableTokens;
+  Db.Accounts = tableAccounts;
 });
 
 Merchant.Db = Db;

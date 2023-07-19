@@ -8,7 +8,7 @@ exports.up = async function (knex) {
   await knex.transaction(async function (trx) {
     await knex.schema
       .createTable("wallet", function (table) {
-        table.specificType("id", "bigint").primary({ primaryKey: true }); // int8/int64
+        table.specificType("id", "varchar").primary({ primaryKey: true }); // int8/int64
 
         // (optionally) store the wallet in the database
         table
@@ -27,7 +27,7 @@ exports.up = async function (knex) {
       .createTable("account", function (table) {
         table.specificType("ulid", "char(34)").primary({ primaryKey: true });
 
-        table.specificType("wallet_id", "bigint").notNullable(); // int8/int64
+        table.specificType("wallet_id", "varchar").notNullable(); // int8/int64
         // note: this should scale with a write lock - creating a billing account is rare
         table.specificType("index", "serial").notNullable(); // int4/int32
         table.specificType("xpub", "char(111)").notNullable();
@@ -44,6 +44,50 @@ exports.up = async function (knex) {
           .foreign("wallet_id")
           .references("wallet.id")
           .deferrable("deferred");
+      })
+      .transacting(trx);
+
+    await knex.schema
+      .createTable("base62_token", function (table) {
+        // lookup by 'id' to protect against timing attack
+        table.specificType("hash_id", "char(24)").primary({ primaryKey: true });
+        table.specificType("token", "char(40)").notNullable();
+        table.specificType("account_ulid", "char(34)").notNullable();
+
+        // TODO stale_at, expires_at
+        table.timestamp("revoked_at", { useTz: false }).nullable();
+
+        table
+          .foreign("account_ulid")
+          .references("account.ulid")
+          .deferrable("deferred");
+
+        addTs(table);
+      })
+      .transacting(trx);
+
+    // for quotas, rate limits, etc
+    await knex.schema
+      .createTable("base62_token_use", function (table) {
+        table.specificType("id", "bigserial").primary({ primaryKey: true });
+
+        table.specificType("base62_token_hash_id", "char(24)").notNullable();
+
+        // audit trail
+        // ex: 'GET /api/hello'
+        table.string("resource", 24).nullable();
+
+        // foreign keys
+        table
+          .foreign("base62_token_hash_id")
+          .references("base62_token.hash_id")
+          .deferrable("deferred");
+
+        // timestamps
+        table
+          .timestamp("created_at", { useTz: false })
+          .notNullable()
+          .defaultTo(knex.fn.now());
       })
       .transacting(trx);
 
@@ -67,7 +111,7 @@ exports.up = async function (knex) {
     await knex.schema
       .createTable("address_cache", function (table) {
         table.specificType("address", "char(34)").primary({ primaryKey: true });
-        table.specificType("wallet_id", "bigint").notNullable(); // int8/int64
+        table.specificType("wallet_id", "varchar").notNullable(); // int8/int64
         table.specificType("account_ulid", "char(36)").notNullable();
         table.specificType("index", "integer").notNullable(); // int4/int32
 
@@ -126,6 +170,16 @@ exports.down = async function (knex) {
       table.dropForeign(["account_ulid"]).transacting(trx);
     });
     await knex.schema.dropTable("address_cache").transacting(trx);
+
+    await knex.table("base62_token_use", function (table) {
+      table.dropForeign(["base62_token_hash_id"]).transacting(trx);
+    });
+    await knex.schema.dropTable("base62_token_use").transacting(trx);
+
+    await knex.table("base62_token", function (table) {
+      table.dropForeign(["account_ulid"]).transacting(trx);
+    });
+    await knex.schema.dropTable("base62_token").transacting(trx);
 
     await knex.table("account", function (table) {
       table.dropForeign(["wallet_id"]).transacting(trx);

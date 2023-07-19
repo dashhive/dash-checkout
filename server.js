@@ -3,8 +3,29 @@
 require("dotenv").config({ path: ".env" });
 require("dotenv").config({ path: ".env.secret" });
 
+// SECURITY remove immediately
+let walletPhrase = process.env.WALLET_PHRASE || "";
+process.env.WALLET_PHRASE = "";
+
+let Wallet = require("./lib/wallet.js");
+let walletId = "";
+/** @type {import('dashhd').HDWallet} */
+let walletKey;
+
 let Merchant = require("./merchant.js");
 let Db = Merchant.Db;
+
+async function initWallet() {
+  walletKey = await Wallet.fromPhrase(walletPhrase);
+  walletPhrase = "";
+  walletId = await Wallet.toId(walletKey);
+  await Db.Accounts._setWalletId({ id: walletId }).catch(function (e) {
+    console.error(e);
+    process.exit(1);
+  });
+}
+// TODO initialize in merchant?
+setTimeout(initWallet, 500);
 
 // https://github.com/dashevo/dashcore-node/blob/master/docs/services/dashd.md
 // https://github.com/dashevo/dashcore-node/blob/master/README.md
@@ -31,16 +52,16 @@ server.use("/", app);
 
 let cors = Cors({ domains: ["*"], methods: ["GET"] });
 
-// TODO use wallet phrase (or root hd key)
-let xpubKey = process.env.XPUB_KEY || "";
-if (!xpubKey) {
-  console.error("missing process.env.XPUB_KEY");
-  process.exit(1);
-}
-if (!xpubKey.startsWith("xpub")) {
-  console.error("wrong format for process.env.XPUB_KEY");
-  process.exit(1);
-}
+// // TODO use wallet phrase (or root hd key)
+// let xpubKey = process.env.XPUB_KEY || "";
+// if (!xpubKey) {
+//   console.error("missing process.env.XPUB_KEY");
+//   process.exit(1);
+// }
+// if (!xpubKey.startsWith("xpub")) {
+//   console.error("wrong format for process.env.XPUB_KEY");
+//   process.exit(1);
+// }
 
 let Cache = require("./lib/cache.js").Cache;
 let sleep = require("./lib/sleep.js").sleep;
@@ -61,11 +82,12 @@ async function rPlansList(req, res) {
 /** @type {import('express').Handler} */
 async function rOrderApiAccess(req, res) {
   let planName = req.params.plan;
-  let accountToken = req.body.token || null;
+  let base62Token = req.body.token || null;
   let email = req.body.email || null;
   let phone = req.body.phone || null;
   let webhook = req.body.webhook || null;
-  let contact = { email, phone, webhook };
+  // TODO
+  //let contact = { email, phone, webhook };
 
   /** @type {import('./lib/plans.js').PlanTier} */
   let plan;
@@ -78,59 +100,82 @@ async function rOrderApiAccess(req, res) {
     });
   }
 
+  let xpubKey;
   let account;
-  let accountIndex;
-  let payaddrs;
-  if (accountToken) {
+  //let accountIndex;
+  if (base62Token) {
+    account = await Db.Accounts.getByToken(base62Token);
+    if (!account) {
+      throw new Error("bad token");
+    }
+    /*
+    let payaddrs;
     [account, payaddrs] = await Db.Tokens.getWithPayAddrs(accountToken);
-  }
-  if (account && payaddrs[0]) {
-    let latestPayAddr = payaddrs[0];
-    accountIndex = latestPayAddr.id;
+    if (account && payaddrs[0]) {
+      let latestPayAddr = payaddrs[0];
+      accountIndex = latestPayAddr.id;
+    } else {
+      // TODO
+      accountIndex = await Db.Addrs.next();
+    }
+    */
   } else {
-    accountIndex = await Db.Addrs.next();
-  }
-  console.log(`[DEBUG] accountIndex`, accountIndex);
+    account = await Db.Accounts.next({ walletId });
+    xpubKey = await Wallet.toXPubKey(walletKey, account.index);
+    account.xpub = await DashHd.toXPub(xpubKey);
+    await Db.Accounts.setXPub(account);
 
-  // TODO this will be per-customer
-  //let XPUB_DEPTH_FULL_AUDIT = 2;
-  let XPUB_DEPTH_AUDIT = 3;
-  let XPUB_DEPTH_SHARE = 4;
-  let contactXPub = await DashHd.fromXKey(xpubKey, { bip32: true, xkey: "" });
-  if (XPUB_DEPTH_AUDIT === contactXPub.depth) {
-    contactXPub = DashHd.deriveChild(
-      contactXPub,
-      DashHd.RECEIVE,
-      DashHd.PUBLIC
-    );
+    let tokenPre = process.env.TOKEN_PRE || "hel_";
+    base62Token = await Db.Accounts.createToken(tokenPre, account, {});
   }
-  if (XPUB_DEPTH_SHARE !== contactXPub.depth) {
-    throw new Error("xpub is not bip44 compatible");
+  console.log(`[DEBUG] account.index`, account.index);
+  if (!xpubKey) {
+    xpubKey = await DashHd.fromXKey(account.xpub);
   }
-  //let xpubStr = DashHd.toXPub(contactXPub);
 
-  let FIRST_ADDRESS = 0;
-  let payAddrKey = await contactXPub.deriveAddress(FIRST_ADDRESS);
-  // TODO insert several into db
-  let payAddr = await DashHd.toAddr(payAddrKey.publicKey);
-  if (!account) {
-    account = await Db.Tokens.generate(accountIndex, payAddr, contact);
-  }
+  //// TODO this will be per-customer
+  ////let XPUB_DEPTH_FULL_AUDIT = 2;
+  //let XPUB_DEPTH_AUDIT = 3;
+  //let XPUB_DEPTH_SHARE = 4;
+  //let contactXPub = await DashHd.fromXKey(xpubKey, { bip32: true, xkey: "" });
+  //if (XPUB_DEPTH_AUDIT === contactXPub.depth) {
+  //  contactXPub = DashHd.deriveChild(
+  //    contactXPub,
+  //    DashHd.RECEIVE,
+  //    DashHd.PUBLIC
+  //  );
+  //}
+  //if (XPUB_DEPTH_SHARE !== contactXPub.depth) {
+  //  throw new Error("xpub is not bip44 compatible");
+  //}
+  ////let xpubStr = DashHd.toXPub(contactXPub);
+  // let FIRST_ADDRESS = 0;
+  // let payAddrKey = await xpubKey.deriveAddress(FIRST_ADDRESS);
+  // // TODO insert several into db
+  // let payAddr = await DashHd.toAddr(payAddrKey.publicKey);
+  // if (!account) {
+  //   account = await Db.Tokens.generate(accountIndex, payAddr, contact);
+  // }
+
+  let prevIndex = await Db.Accounts.getPrevPayment(account);
+  let nextIndex = prevIndex + 1;
+  let nextAddrKey = await xpubKey.deriveAddress(nextIndex);
+  let nextAddress = await DashHd.toAddr(nextAddrKey.publicKey);
 
   // TODO prevent domain fronting
   let baseUrl = `https://${req.hostname}`;
-  let resp = await registerWebhook(baseUrl, account, [payAddr]);
+  let resp = await registerWebhook(baseUrl, account, [nextAddress]);
   console.log("[DEBUG] register webhook", resp.body);
 
   let MIN_STAMP_VALUE = 800;
   let value = toSats(plan.amount);
   value += MIN_STAMP_VALUE;
 
-  let xpub = await DashHd.toXPub(contactXPub);
+  let xpub = await DashHd.toXPub(xpubKey);
   let amount = toDash(value);
   // TODO: DIP: Agent should warn user if URL is not expected?
   let content = Qr.toUrl({
-    address: payAddr,
+    address: nextAddress,
     xpub: xpub,
     amount: amount,
     nickname: "Hello API",
@@ -145,19 +190,20 @@ async function rOrderApiAccess(req, res) {
     }).toString();
   }
 
-  res.json({
-    addresses: [payAddr],
-    address: payAddr,
-    payaddr: payAddr,
+  let result = {
+    addresses: [nextAddress],
+    address: nextAddress,
+    payaddr: nextAddress,
     amount: plan.amount,
     token: account.token,
-    status_url: `${baseUrl}/api/public/account/${account.token}/status`,
+    status_url: `${baseUrl}/api/public/account/${base62Token}/status`,
     qr: {
       // not url-safe because it will be used by data-uri
       src: `data:image/svg+xml;base64,${svgB64}`,
-      api_src: `/api/payment-addresses/${payAddr}.svg?${search}`,
+      api_src: `/api/payment-addresses/${nextAddress}.svg?${search}`,
     },
-  });
+  };
+  res.json(result);
 }
 
 /**
