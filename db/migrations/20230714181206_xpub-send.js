@@ -27,7 +27,7 @@ exports.up = async function (knex) {
       .createTable("account", function (table) {
         table.specificType("ulid", "char(34)").primary({ primaryKey: true });
 
-        table.specificType("wallet_id", "varchar").notNullable(); // int8/int64
+        table.specificType("wallet_id", "char(11)").notNullable(); // int8/int64
         // note: this should scale with a write lock - creating a billing account is rare
         table.specificType("index", "serial").notNullable(); // int4/int32
         table.specificType("xpub", "char(111)").notNullable();
@@ -53,6 +53,12 @@ exports.up = async function (knex) {
           .references("wallet.id")
           .deferrable("deferred");
       })
+      .transacting(trx);
+    await knex
+      .raw(`ALTER SEQUENCE "account_index_seq" MINVALUE 1`)
+      .transacting(trx);
+    await knex
+      .raw(`ALTER SEQUENCE "account_index_seq" RESTART WITH 1`)
       .transacting(trx);
 
     await knex.schema
@@ -103,7 +109,6 @@ exports.up = async function (knex) {
       .createTable("payment", function (table) {
         table.specificType("ulid", "char(34)").primary({ primaryKey: true });
         table.specificType("account_ulid", "char(34)").notNullable();
-        table.specificType("index", "integer").notNullable(); // int4/int32
         table.specificType("satoshis", "bigint").notNullable(); // int8/int64
 
         // foreign keys
@@ -124,9 +129,10 @@ exports.up = async function (knex) {
     await knex.schema
       .createTable("address_cache", function (table) {
         table.specificType("address", "char(34)").primary({ primaryKey: true });
-        table.specificType("wallet_id", "varchar").notNullable(); // int8/int64
-        table.specificType("account_ulid", "char(36)").notNullable();
-        table.specificType("index", "integer").notNullable(); // int4/int32
+        table.specificType("wallet_id", "char(11)").notNullable(); // int8/int64
+        table.specificType("account_ulid", "char(34)").notNullable();
+        table.specificType("address_index", "integer").notNullable(); // int4/int32
+        table.specificType("payment_ulid", "char(34)").notNullable();
 
         addTs(table);
 
@@ -134,6 +140,10 @@ exports.up = async function (knex) {
         table
           .foreign("account_ulid")
           .references("account.ulid")
+          .deferrable("deferred");
+        table
+          .foreign("payment_ulid")
+          .references("payment.ulid")
           .deferrable("deferred");
       })
       .transacting(trx);
@@ -181,6 +191,7 @@ exports.down = async function (knex) {
 
     await knex.table("address_cache", function (table) {
       table.dropForeign(["account_ulid"]).transacting(trx);
+      table.dropForeign(["payment_ulid"]).transacting(trx);
     });
     await knex.schema.dropTable("address_cache").transacting(trx);
 
