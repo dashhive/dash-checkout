@@ -32,6 +32,14 @@ exports.up = async function (knex) {
         table.specificType("index", "serial").notNullable(); // int4/int32
         table.specificType("xpub", "char(111)").notNullable();
 
+        // int4/int32
+        table.specificType("soft_quota", "integer").notNullable().defaultTo(0);
+        table.specificType("hard_quota", "integer").notNullable().defaultTo(0);
+
+        // for paid features
+        table.timestamp("stale_at", { useTz: false }).nullable();
+        table.timestamp("expires_at", { useTz: false }).nullable();
+
         // for notifications
         table.string("email").nullable();
         table.string("phone").nullable();
@@ -69,13 +77,13 @@ exports.up = async function (knex) {
     // for quotas, rate limits, etc
     await knex.schema
       .createTable("base62_token_use", function (table) {
-        table.specificType("id", "bigserial").primary({ primaryKey: true });
+        table.specificType("id", "serial").primary({ primaryKey: true });
 
         table.specificType("base62_token_hash_id", "char(24)").notNullable();
 
         // audit trail
         // ex: 'GET /api/hello'
-        table.string("resource", 24).nullable();
+        table.specificType("resource", "varchar").nullable();
 
         // foreign keys
         table
@@ -104,7 +112,12 @@ exports.up = async function (knex) {
           .references("account.ulid")
           .deferrable("deferred");
 
-        addTs(table);
+        // timestamps
+        table
+          .timestamp("created_at", { useTz: false })
+          .notNullable()
+          .defaultTo(knex.fn.now());
+        table.timestamp("paid_at", { useTz: false });
       })
       .transacting(trx);
 

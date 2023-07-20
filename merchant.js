@@ -147,6 +147,8 @@ Merchant.rParsePaymentWebhook = async function (req, res, next) {
   console.info(`Dash Payment Webhook:`);
   console.info(p);
 
+    // TODO
+    //@ts-ignore
   req.payment = payment;
 
   next();
@@ -162,7 +164,7 @@ Merchant.rTokenAuth = async function (req, res, next) {
   if (isMasterAccount) {
     account = MA.create(masterTok, "TODO-self-webhook");
   } else {
-    account = await Db.Tokens.get(token);
+    account = await Db.Accounts.getByToken(token);
   }
 
   if (!account) {
@@ -172,7 +174,11 @@ Merchant.rTokenAuth = async function (req, res, next) {
     });
   }
 
+  // TODO
+  //@ts-ignore
   req.token = token;
+  //@ts-ignore
   req.account = account;
+
   next();
 };

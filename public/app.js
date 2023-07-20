@@ -32,6 +32,7 @@
     let json = await resp.json();
     console.log("[DEBUG] response:", json);
     if (json.token) {
+      accountToken = json.token;
       localStorage.setItem("token", json.token);
     }
 
@@ -50,14 +51,15 @@
     });
     $(`[data-id="payment-address"]`).hidden = false;
 
-    poll(json.status_url);
+    poll(accountToken, json.status_url);
   });
 
-  async function poll(statusUrl) {
+  async function poll(accountToken, statusUrl) {
     let resp = await fetch(statusUrl, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${accountToken}`,
       },
     });
     let json = await resp.json();
